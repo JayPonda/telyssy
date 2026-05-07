@@ -6,6 +6,8 @@ class TeliDemoCredentials {
   int _apiId;
   String _apiHash;
   String? _phoneNumber;
+  String? _phoneCodeHash;
+  String? _sessionData;
 
   TeliDemoCredentials({
     required int apiId,
@@ -21,4 +23,12 @@ class TeliDemoCredentials {
 
   String? get phoneNumber => _phoneNumber;
   set phoneNumber(String? value) => _phoneNumber = value;
+
+  String? get phoneCodeHash => _phoneCodeHash;
+  set phoneCodeHash(String? value) => _phoneCodeHash = value;
+
+  /// Stores the session data (JSON) for persistence. 
+  /// Can be overridden to implement custom storage (e.g., file, database).
+  String? get sessionData => _sessionData;
+  set sessionData(String? value) => _sessionData = value;
 }

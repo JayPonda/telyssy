@@ -8,7 +8,9 @@ environment:
 
 # Add regular dependencies here.
 dependencies:
-  telegram_universe: ^0.0.4
+  tg:
+    path: ./tg
+  t: ^224.0.0
   # path: ^1.9.0
 
 dev_dependencies:
