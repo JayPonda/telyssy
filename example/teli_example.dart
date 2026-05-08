@@ -66,20 +66,20 @@ void main() async {
       return;
     }
 
+    stdout.write('Enter Country Code (e.g., 91): ');
+    final countryCode = stdin.readLineSync() ?? '';
+    stdout.write('Enter Phone Number (e.g., 9876543210): ');
+    final phoneNumber = stdin.readLineSync() ?? '';
+
     credentials = TeliCredentials(
       apiId: apiId,
       apiHash: apiHash,
+      countryCode: countryCode,
+      phoneNumber: phoneNumber,
     );
 
     print('[Auth] Authenticating...');
     final auth = TeliAuth(credentials);
-
-    auth.onAuthRequired = () {
-      stdout.write('Enter Country Code (e.g., 91): ');
-      credentials?.countryCode = stdin.readLineSync() ?? '';
-      stdout.write('Enter Phone Number (e.g., 9876543210): ');
-      credentials?.phoneNumber = stdin.readLineSync() ?? '';
-    };
 
     auth.onGetOtp = () async {
       stdout.write('[Auth] Enter OTP code: ');
@@ -110,6 +110,15 @@ void main() async {
   // Create client with credentials
   final client = TeliClient(credentials);
 
+  // Setup logout hooks
+  client.onBeforeLogout = () {
+    print('[Hook] Cleaning up before logout...');
+  };
+
+  client.onAfterLogout = (result) {
+    print('[Hook] Logout complete. Server confirmation received.');
+  };
+
   try {
     print('[Action] Connecting to Telegram...');
     await client.connect();
@@ -137,8 +146,23 @@ void main() async {
       }
 
       if (chats.isNotEmpty) {
-        stdout.write('\nEnter index to view messages (or enter to skip): ');
+        stdout.write(
+          '\nEnter index to view messages, "L" to logout, or enter to skip: ',
+        );
         final input = stdin.readLineSync();
+        if (input != null && input.toUpperCase() == 'L') {
+          print('[Action] Logging out...');
+          final res = await client.logout();
+          if (res.error == null) {
+            SessionStore.clear();
+            print('[Status] Logged out and session cleared.');
+            return;
+          } else {
+            print('[Error] Logout failed: ${res.error!.errorMessage}');
+            print('[Action] Continuing with session...');
+          }
+        }
+
         if (input != null && input.isNotEmpty) {
           final index = int.tryParse(input);
           if (index != null && index >= 0 && index < chats.length) {
@@ -264,8 +288,22 @@ void main() async {
       print('[Error] Failed to fetch dialogs: ${response.error?.errorMessage}');
     }
 
-    print('\n[Action] Shutting down...');
-    await client.close();
+    stdout.write('\nWould you like to logout before exiting? (y/N): ');
+    final logoutChoice = stdin.readLineSync()?.toLowerCase();
+    if (logoutChoice == 'y') {
+      print('[Action] Logging out...');
+      final res = await client.logout();
+      if (res.error == null) {
+        SessionStore.clear();
+        print('[Status] Logged out and session cleared.');
+      } else {
+        print('[Error] Logout failed: ${res.error!.errorMessage}');
+        await client.close();
+      }
+    } else {
+      print('\n[Action] Shutting down...');
+      await client.close();
+    }
     print('[Status] Done.');
   } catch (e) {
     print('[Fatal] Error: $e');

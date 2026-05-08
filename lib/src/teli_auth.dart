@@ -59,11 +59,16 @@ final class TeliAuth {
   ///
   /// Returns an [AuthResult] containing credentials on success.
   Future<AuthResult> login({
-    String ip = '91.108.56.130',
-    int port = 443,
-    int dcId = 5,
+    String? ip,
+    int? port,
+    int? dcId,
   }) async {
     try {
+      final host = credentials.getHost();
+      ip ??= host.ip;
+      port ??= host.port;
+      dcId ??= host.dcId;
+
       credentials.validateApiCredentials();
 
       final socket = await Socket.connect(ip, port);

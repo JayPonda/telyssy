@@ -8,10 +8,8 @@ environment:
 
 # Add regular dependencies here.
 dependencies:
-  tg:
-    path: ./tg
-  t:
-    path: ./t
+  tg: ^0.0.18
+  t: ^225.0.0
   meta: ^1.18.2
 
 dev_dependencies:

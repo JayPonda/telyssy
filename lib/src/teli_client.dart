@@ -14,9 +14,10 @@ import 'teli_credentials.dart';
 /// It provides a simplified interface for common tasks like retrieving
 /// messages and channels, while maintaining full transparent access
 /// to the raw MTProto schema objects.
-final class TeliClient {
+class TeliClient {
   tg.Client? _client;
   TeliSocket? _teliSocket;
+  StreamSubscription<dynamic>? _streamSubscription;
   final TeliCredentials credentials;
   final StreamController<dynamic> _updateController =
       StreamController<dynamic>.broadcast();
@@ -29,12 +30,23 @@ final class TeliClient {
   /// This is `null` until [connect] is called.
   tg.Client? get rawClient => _client;
 
+  /// Callback triggered before starting the logout process.
+  FutureOr<void> Function()? onBeforeLogout;
+
+  /// Callback triggered after a successful logout from Telegram.
+  void Function(t.AuthLoggedOutBase result)? onAfterLogout;
+
   /// Establishes a connection to Telegram using the provided credentials.
   Future<void> connect({
-    String ip = '91.108.56.130',
-    int port = 443,
-    int dcId = 5,
+    String? ip,
+    int? port,
+    int? dcId,
   }) async {
+    final host = credentials.getHost();
+    ip ??= host.ip;
+    port ??= host.port;
+    dcId ??= host.dcId;
+
     final sessionData = credentials.sessionData;
     if (sessionData == null || sessionData.isEmpty) {
       throw StateError(
@@ -62,8 +74,10 @@ final class TeliClient {
       idGenerator: idGenerator,
     );
 
-    _client!.stream.listen((event) {
-      _updateController.add(event);
+    _streamSubscription = _client!.stream.listen((event) {
+      if (!_updateController.isClosed) {
+        _updateController.add(event);
+      }
     });
 
     await _client!.initConnection<t.Config>(
@@ -340,13 +354,42 @@ final class TeliClient {
     return allMessages;
   }
 
+  /// Terminates the current session and clears the local session data.
+  ///
+  /// This calls `auth.logOut` on the Telegram server, which invalidates
+  /// the current authorization key.
+  Future<t.Result<t.AuthLoggedOutBase>> logout() async {
+    if (onBeforeLogout != null) {
+      await onBeforeLogout!();
+    }
+
+    final result = await invoke<t.AuthLoggedOutBase>(const t.AuthLogOut());
+
+    if (result.error == null) {
+      final loggedOut = result.result!;
+      print('[Client] Telegram says: Goodbye! Session invalidated.');
+      if (loggedOut is t.AuthLoggedOut && loggedOut.futureAuthToken != null) {
+        print('[Client] Future Auth Token received.');
+      }
+
+      onAfterLogout?.call(loggedOut);
+
+      credentials.sessionData = null;
+      await close();
+    }
+
+    return result;
+  }
+
   /// Closes the connection and releases resources.
   Future<void> close() async {
     print('[Client] Shutting down client...');
+    await _streamSubscription?.cancel();
     await _teliSocket?.close();
     await _updateController.close();
     _client = null;
     _teliSocket = null;
+    _streamSubscription = null;
     print('[Client] Client shutdown complete.');
   }
 }
