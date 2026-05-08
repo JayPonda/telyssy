@@ -44,9 +44,16 @@ final class TeliDemoClient {
   /// Callback used to retrieve the OTP code from the user.
   Future<String> Function()? onGetOtp;
 
+  /// Callback triggered when 2-step verification (2FA) is required.
+  ///
+  /// This callback must return the 2FA password. The [hint] provides the
+  /// password hint configured by the user.
+  Future<String> Function(String hint)? on2faRequired;
+
   /// Callback used to retrieve the 2FA password from the user.
   ///
   /// The [hint] provides the password hint configured by the user.
+  @Deprecated('Use on2faRequired instead')
   Future<String> Function(String hint)? onGetPassword;
 
   /// Callback triggered when the authentication process completes.
@@ -199,6 +206,7 @@ final class TeliDemoClient {
 
       if (signInResponse.error != null) {
         if (signInResponse.error!.errorMessage == 'SESSION_PASSWORD_NEEDED') {
+          print('[Auth] OTP accepted. 2-Step Verification (2FA) is enabled.');
           return await _handle2FA();
         } else {
           final res = AuthResult(
@@ -225,17 +233,21 @@ final class TeliDemoClient {
     if (accountPasswordResponse.result is t.AccountPassword) {
       final accountPassword =
           accountPasswordResponse.result as t.AccountPassword;
+      final hint = accountPassword.hint ?? '';
 
-      if (onGetPassword == null) {
+      final passwordProvider = on2faRequired ?? onGetPassword;
+
+      if (passwordProvider == null) {
         final res = const AuthResult(
           success: false,
-          message: '2FA required but onGetPassword callback not provided.',
+          message: '2FA required but no password callback provided.',
         );
         onAuthResult?.call(res);
         return res;
       }
 
-      final password = await onGetPassword!(accountPassword.hint ?? '');
+      print('[Auth] Requesting 2FA password (Hint: $hint)...');
+      final password = await passwordProvider(hint);
       final srp = await tg.check2FA(accountPassword, password);
       final checkPasswordResponse =
           await _client!.auth.checkPassword(password: srp);

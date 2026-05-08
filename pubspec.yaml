@@ -10,8 +10,8 @@ environment:
 dependencies:
   tg:
     path: ./tg
-  t: ^224.0.0
-  # path: ^1.9.0
+  t:
+    path: ./t
 
 dev_dependencies:
   lints: ^6.0.0
