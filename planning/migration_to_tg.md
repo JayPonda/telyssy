@@ -10,10 +10,10 @@ This document outlines the implementation plan for switching from `telegram_univ
 ## Tasks
 - [x] Create `planning/migration_to_tg.md`.
 - [x] Update `pubspec.yaml` dependencies (using local `tg` package).
-- [x] Update `TeliDemoCredentials` to store `phoneCodeHash`.
-- [x] Refactor `TeliDemoClient` to use `tg.Client`.
-- [x] Update `example/telidemo_example.dart`.
-- [x] Update `test/telidemo_client_test.dart`.
+- [x] Update `TeliCredentials` to store `phoneCodeHash`.
+- [x] Refactor `TeliClient` to use `tg.Client`.
+- [x] Update `example/teli_example.dart`.
+- [x] Update `test/teli_client_test.dart`.
 
 ## Architecture
 We are moving from a TDLib-based wrapper (C++ bridge) to a pure Dart MTProto client. This removes the need for native binaries and a dedicated database directory for most basic tasks.

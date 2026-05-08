@@ -4,9 +4,13 @@
 /// protocol, allowing developers to quickly implement Telegram functionality
 /// such as authentication, messaging, and update handling.
 ///
-/// To get started, use the [TeliDemoClient] class.
+/// To get started, use the [TeliClient] class.
 library;
 
-export 'src/telidemo_client.dart';
-export 'src/telidemo_credentials.dart';
-export 'src/telidemo_socket.dart';
+export 'src/teli_client.dart';
+export 'src/teli_auth.dart';
+// teli_session.dart is internal-only
+export 'src/teli_credentials.dart';
+// teli_socket.dart is internal-only
+
+
