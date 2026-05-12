@@ -7,6 +7,8 @@ import 'package:tg/tg.dart' as tg;
 
 import 'teli_credentials.dart';
 import 'teli_socket.dart';
+export 'package:tg/tg.dart' show check2FA;
+
 
 /// Defines the result of an authentication attempt.
 class AuthResult {
