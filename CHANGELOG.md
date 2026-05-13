@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1 (2026-05-14)
+
+### Bug Fixes
+- **Timeout enforcement on all network operations.** Previously, `Socket.connect`, DH key exchange, `initConnection`, and all API method invocations lacked timeouts, causing the app to hang indefinitely when the Telegram server was unreachable or slow. Added:
+  - 15s timeout on TCP socket connection.
+  - 30s timeout on authorization key exchange (Diffie-Hellman).
+  - 20s timeout on all API calls (`initConnection`, `users.getUsers`, `auth.sendCode`, `auth.signIn`, `account.getPassword`, `auth.checkPassword`).
+  - Timeout errors are surfaced as `TeliAuthError` states instead of silent hangs.
+- **Fixed unbounded recursion on session expiry.** The `login()` method recursed infinitely when `AUTH_KEY_UNREGISTERED` or `AUTH_RESTART` errors persisted. Now limited to 2 consecutive retries before returning `TeliAuthError`.
+
 ## 1.1.0 (2026-05-13)
 
 ### Rebranding & Architecture Refactor

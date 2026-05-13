@@ -1,6 +1,6 @@
 name: telissy
 description: A high-level, resource-oriented Telegram client library for Dart.
-version: 1.1.0
+version: 1.1.1
 # repository: https://github.com/my_org/my_repo
 
 environment:

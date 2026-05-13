@@ -8,7 +8,7 @@ import 'package:tg/tg.dart' as tg;
 import 'socket.dart';
 import '../models/models.dart';
 
-/// A high-level Telegram client for executing API methods.
+  /// A high-level Telegram client for executing API methods.
 class TeliClient {
   tg.Client? _client;
   TeliSocket? _teliSocket;
@@ -23,6 +23,9 @@ class TeliClient {
 
   tg.Client? get rawClient => _client;
 
+  /// Connects to Telegram using the stored session.
+  ///
+  /// Uses a 15s timeout on TCP socket connection.
   Future<void> connect({
     String? ip,
     int? port,
@@ -41,7 +44,11 @@ class TeliClient {
     credentials.validateApiCredentials();
 
     if (_teliSocket == null) {
-      final socket = await Socket.connect(ip, port);
+      final socket = await Socket.connect(
+        ip,
+        port,
+        timeout: const Duration(seconds: 15),
+      );
       _teliSocket = TeliSocket(socket);
     }
     
