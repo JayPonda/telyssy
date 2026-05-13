@@ -1,39 +1,99 @@
-<!-- 
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+# telidemo
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages). 
+A high-level, pure Dart wrapper around the Telegram MTProto API. `telidemo` provides a simplified interface for building Telegram clients, handling authentication, and managing message history with ease.
 
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages). 
--->
-
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+Built on top of the `tg` transport layer and `t` TL schema packages.
 
 ## Features
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+- **100% Pure Dart:** No native binaries, works across all platforms supported by Dart.
+- **Simplified Authentication:** Automated login flow handling OTP and 2-step verification (2FA) via callbacks.
+- **High-Level Messaging:** 
+    - Fetch messages by time range.
+    - Backward pagination until a specific message ID.
+    - Transparent RPC invocation for the full MTProto API.
+- **Session Persistence:** Easy serialization and restoration of authorization keys.
+- **Smart DC Selection:** Automatic selection of the nearest Telegram datacenter based on country code.
+- **Update Handling:** Stream-based interface for receiving server-side updates.
 
 ## Getting started
 
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
+Add `telidemo` to your `pubspec.yaml`. Since it's currently a wrapper for internal use, you can point to the repository or use it locally.
+
+```yaml
+dependencies:
+  telidemo:
+    path: ../telyBelly # or git dependency
+  t: ^225.0.0
+  tg: ^0.0.18
+```
 
 ## Usage
 
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder. 
+### 1. Configure Credentials
 
 ```dart
-const like = 'sample';
+import 'package:telidemo/telidemo.dart';
+
+final credentials = TeliCredentials(
+  apiId: 123456,
+  apiHash: 'your_api_hash',
+  countryCode: '91',
+  phoneNumber: '9876543210',
+);
+```
+
+### 2. Authentication (TeliAuth)
+
+```dart
+final auth = TeliAuth(credentials);
+
+auth.onGetOtp = () async {
+  // Logic to get OTP from user (e.g., via UI or stdin)
+  return '12345';
+};
+
+auth.on2faRequired = (hint) async {
+  // Logic to get 2FA password if enabled
+  print('Hint: $hint');
+  return 'your_password';
+};
+
+final result = await auth.login();
+if (result.success) {
+  print('Signed in as: ${result.rawData}');
+  // Save credentials.sessionData for future use
+}
+```
+
+### 3. Using the Client (TeliClient)
+
+```dart
+final client = TeliClient(credentials);
+
+// Connect and resume session
+await client.connect();
+
+// Fetch last 24 hours of messages from a channel
+final messages = await client.getMessagesByTimeRange(
+  channelId,
+  accessHash: accessHash,
+  startDate: DateTime.now().subtract(Duration(hours: 24)),
+);
+
+// Listen for updates
+client.onUpdate((data) {
+  print('New Update: $data');
+});
+
+// Invoke raw MTProto methods
+final config = await client.invoke(const t.HelpGetConfig());
 ```
 
 ## Additional information
 
-TODO: Tell users more about the package: where to find more information, how to 
-contribute to the package, how to file issues, what response they can expect 
-from the package authors, and more.
+### MTProto Schema
+This library uses `package:t` for the TL schema. All result types from `invoke`, `getMessages`, etc., are from the `t` namespace.
+
+### Contributing
+Contributions are welcome! Please see the `planning/` directory for upcoming features and architectural decisions.
