@@ -343,6 +343,7 @@ class TeliClient {
     required int accessHash,
     required Uint8List fileReference,
     int chunkSize = 1024 * 1024,
+    void Function(int downloadedBytes)? onProgress,
   }) async {
     final location = t.InputDocumentFileLocation(
       id: documentId,
@@ -352,18 +353,21 @@ class TeliClient {
     );
 
     final chunks = <Uint8List>[];
+    int downloadedBytes = 0;
 
     while (true) {
       final result = await invoke(t.UploadGetFile(
         precise: false,
         cdnSupported: false,
         location: location,
-        offset: chunks.fold<int>(0, (s, c) => s + c.length),
+        offset: downloadedBytes,
         limit: chunkSize,
       ));
 
       if (result is t.UploadFile) {
         chunks.add(result.bytes);
+        downloadedBytes += result.bytes.length;
+        onProgress?.call(downloadedBytes);
         if (result.bytes.length < chunkSize) break;
       } else if (result is t.UploadFileCdnRedirect) {
         throw UnsupportedError('CDN redirect not implemented');
@@ -372,8 +376,7 @@ class TeliClient {
       }
     }
 
-    final total = chunks.fold<int>(0, (s, c) => s + c.length);
-    final output = Uint8List(total);
+    final output = Uint8List(downloadedBytes);
     int pos = 0;
     for (final chunk in chunks) {
       output.setRange(pos, pos + chunk.length, chunk);
