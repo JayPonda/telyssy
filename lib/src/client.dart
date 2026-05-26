@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
+import 'dart:typed_data';
 import 'package:t/t.dart' as t;
 import 'package:tg/tg.dart' as tg;
 
@@ -329,6 +329,57 @@ class TeliClient {
       cursorDate = oldestDate;
       cursorId = oldestId;
     }
+  }
+
+  /// Download a file (document) from Telegram.
+  ///
+  /// [documentId] and [accessHash] come from [TeliMessage.documentId] /
+  /// [TeliMessage.documentAccessHash]. [fileReference] comes from
+  /// [TeliMessage.fileReference].
+  ///
+  /// Downloads in [chunkSize]-byte chunks and returns the complete raw bytes.
+  Future<Uint8List> downloadFile({
+    required int documentId,
+    required int accessHash,
+    required Uint8List fileReference,
+    int chunkSize = 1024 * 1024,
+  }) async {
+    final location = t.InputDocumentFileLocation(
+      id: documentId,
+      accessHash: accessHash,
+      fileReference: fileReference,
+      thumbSize: '',
+    );
+
+    final chunks = <Uint8List>[];
+
+    while (true) {
+      final result = await invoke(t.UploadGetFile(
+        precise: false,
+        cdnSupported: false,
+        location: location,
+        offset: chunks.fold<int>(0, (s, c) => s + c.length),
+        limit: chunkSize,
+      ));
+
+      if (result is t.UploadFile) {
+        chunks.add(result.bytes);
+        if (result.bytes.length < chunkSize) break;
+      } else if (result is t.UploadFileCdnRedirect) {
+        throw UnsupportedError('CDN redirect not implemented');
+      } else {
+        throw Exception('Unexpected upload response: ${result.runtimeType}');
+      }
+    }
+
+    final total = chunks.fold<int>(0, (s, c) => s + c.length);
+    final output = Uint8List(total);
+    int pos = 0;
+    for (final chunk in chunks) {
+      output.setRange(pos, pos + chunk.length, chunk);
+      pos += chunk.length;
+    }
+    return output;
   }
 
   Future<void> logout() async {

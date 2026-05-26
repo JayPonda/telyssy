@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 (2026-05-26)
+
+### Bug Fixes
+- **Fixed missing imports in `TeliClient`.** Added `dart:io` (for `Socket.connect`) and `dart:convert` (for `jsonDecode`) to `client.dart` to resolve compilation errors.
+
 ## 1.1.1 (2026-05-14)
 
 ### Bug Fixes

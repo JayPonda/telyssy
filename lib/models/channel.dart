@@ -14,6 +14,8 @@ class TeliChannel {
 
   /// Whether the user has been kicked or the chat is otherwise inaccessible.
   final bool isForbidden;
+  final String? username;
+  final int? participantsCount;
 
   const TeliChannel({
     required this.id,
@@ -22,6 +24,8 @@ class TeliChannel {
     this.isChannel = false,
     this.isBroadcast = false,
     this.isForbidden = false,
+    this.username,
+    this.participantsCount,
   });
 
   factory TeliChannel.fromRaw(t.ChatBase raw) {
@@ -32,12 +36,15 @@ class TeliChannel {
           accessHash: c.accessHash,
           isChannel: true,
           isBroadcast: c.broadcast,
+          username: c.username,
+          participantsCount: c.participantsCount,
         ),
       t.Chat c => TeliChannel(
           id: c.id,
           title: c.title,
           isChannel: false,
           isBroadcast: false,
+          participantsCount: c.participantsCount,
         ),
       t.ChannelForbidden c => TeliChannel(
           id: c.id,
