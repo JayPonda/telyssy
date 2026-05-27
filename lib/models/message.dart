@@ -41,6 +41,8 @@ class TeliMessage {
   final String? audioTitle;
   final String? audioPerformer;
   final int? audioDuration;
+  final int? groupedId;
+  final String? photoThumbSize;
 
   const TeliMessage({
     required this.id,
@@ -61,6 +63,8 @@ class TeliMessage {
     this.audioTitle,
     this.audioPerformer,
     this.audioDuration,
+    this.groupedId,
+    this.photoThumbSize,
   });
 
   factory TeliMessage.fromRaw(t.MessageBase raw) {
@@ -91,8 +95,37 @@ class TeliMessage {
     String? audioTitle;
     String? audioPerformer;
     int? audioDuration;
+    String? photoThumbSize;
 
-    if (m.media is t.MessageMediaDocument) {
+    if (m.media is t.MessageMediaPhoto) {
+      // Extract photo access fields — these are needed to construct
+      // an InputPhotoFileLocation for downloading.
+      final photo = (m.media as t.MessageMediaPhoto).photo;
+      if (photo is t.Photo) {
+        docId = photo.id;
+        docAccessHash = photo.accessHash;
+        docFileRef = photo.fileReference;
+        docMimeType = 'image/jpeg'; // Telegram always stores photos as JPEG
+        // Find the largest PhotoSize and its type string (required for
+        // InputPhotoFileLocation.thumbSize — empty string is invalid).
+        int maxSize = 0;
+        String? largestType;
+        for (final size in photo.sizes) {
+          if (size is t.PhotoSize && size.size > maxSize) {
+            maxSize = size.size;
+            largestType = size.type;
+          } else if (size is t.PhotoSizeProgressive &&
+              size.sizes.isNotEmpty &&
+              size.sizes.last > maxSize) {
+            maxSize = size.sizes.last;
+            largestType = size.type;
+          }
+        }
+        docSize = maxSize > 0 ? maxSize : null;
+        // Fall back to 'y' (largest standard size) if no type found
+        photoThumbSize = largestType ?? 'y';
+      }
+    } else if (m.media is t.MessageMediaDocument) {
       final doc = (m.media as t.MessageMediaDocument).document;
       if (doc is t.Document) {
         docId = doc.id;
@@ -129,6 +162,8 @@ class TeliMessage {
       audioTitle: audioTitle,
       audioPerformer: audioPerformer,
       audioDuration: audioDuration,
+      groupedId: m.groupedId,
+      photoThumbSize: photoThumbSize,
     );
   }
 

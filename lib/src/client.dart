@@ -8,6 +8,23 @@ import 'package:tg/tg.dart' as tg;
 import 'socket.dart';
 import '../models/models.dart';
 
+/// Known Telegram datacenter IPs and ports.
+///
+/// See https://core.telegram.org/methods#infrastructure
+final _dcOptions = <int, _DcHost>{
+  1: _DcHost(ip: '149.154.175.53', port: 443),
+  2: _DcHost(ip: '149.154.167.51', port: 443),
+  3: _DcHost(ip: '149.154.175.100', port: 443),
+  4: _DcHost(ip: '149.154.167.91', port: 443),
+  5: _DcHost(ip: '91.108.56.130', port: 443),
+};
+
+class _DcHost {
+  final String ip;
+  final int port;
+  const _DcHost({required this.ip, required this.port});
+}
+
   /// A high-level Telegram client for executing API methods.
 class TeliClient {
   tg.Client? _client;
@@ -16,6 +33,11 @@ class TeliClient {
   final TeliCredentials credentials;
   final StreamController<dynamic> _updateController =
       StreamController<dynamic>.broadcast();
+
+  /// Pool of clients connected to non-home DCs, keyed by DC ID.
+  /// Used for FILE_MIGRATE_X resolution — files stored on a different
+  /// DC must be downloaded from that DC.
+  final Map<int, _DcClient> _dcPool = {};
 
   TeliClient(this.credentials, {tg.Client? client, TeliSocket? teliSocket})
       : _client = client,
@@ -51,7 +73,7 @@ class TeliClient {
       );
       _teliSocket = TeliSocket(socket);
     }
-    
+
     final obfuscation = tg.Obfuscation.random(false, dcId);
     final idGenerator = tg.MessageIdGenerator();
 
@@ -462,6 +484,9 @@ class TeliClient {
   /// [TeliMessage.fileReference].
   ///
   /// Downloads in [chunkSize]-byte chunks and yields them as they arrive.
+  ///
+  /// Automatically handles `FILE_MIGRATE_X` errors by connecting to the
+  /// correct DC and retrying — callers never see these errors.
   Stream<Uint8List> downloadFile({
     required int documentId,
     required int accessHash,
@@ -469,24 +494,94 @@ class TeliClient {
     int offset = 0,
     int chunkSize = 1024 * 1024,
     void Function(int downloadedBytes)? onProgress,
-  }) async* {
-    final location = t.InputDocumentFileLocation(
-      id: documentId,
-      accessHash: accessHash,
-      fileReference: fileReference,
-      thumbSize: '',
+  }) {
+    return _downloadWithDcMigration(
+      location: t.InputDocumentFileLocation(
+        id: documentId,
+        accessHash: accessHash,
+        fileReference: fileReference,
+        thumbSize: '',
+      ),
+      offset: offset,
+      chunkSize: chunkSize,
+      onProgress: onProgress,
     );
+  }
 
+  /// Download a photo from Telegram.
+  ///
+  /// [photoId] and [accessHash] come from [TeliMessage.documentId] /
+  /// [TeliMessage.documentAccessHash] (reused for photos). [fileReference]
+  /// comes from [TeliMessage.fileReference].
+  ///
+  /// Downloads the largest available size in [chunkSize]-byte chunks.
+  ///
+  /// Automatically handles `FILE_MIGRATE_X` errors by connecting to the
+  /// correct DC and retrying — callers never see these errors.
+  Stream<Uint8List> downloadPhoto({
+    required int photoId,
+    required int accessHash,
+    required Uint8List fileReference,
+    String thumbSize = 'y',
+    int offset = 0,
+    int chunkSize = 1024 * 1024,
+    void Function(int downloadedBytes)? onProgress,
+  }) {
+    return _downloadWithDcMigration(
+      location: t.InputPhotoFileLocation(
+        id: photoId,
+        accessHash: accessHash,
+        fileReference: fileReference,
+        thumbSize: thumbSize,
+      ),
+      offset: offset,
+      chunkSize: chunkSize,
+      onProgress: onProgress,
+    );
+  }
+
+  /// Core download stream with automatic FILE_MIGRATE_X handling.
+  ///
+  /// On `FILE_MIGRATE_X`, connects to the target DC and restarts the
+  /// download from [offset]. The caller never sees FILE_MIGRATE errors.
+  Stream<Uint8List> _downloadWithDcMigration({
+    required t.TlObject location,
+    required int offset,
+    required int chunkSize,
+    void Function(int downloadedBytes)? onProgress,
+    int migrateRetryCount = 0,
+  }) async* {
+    int? dcId;
     int downloadedBytes = offset;
 
     while (true) {
-      final result = await invoke(t.UploadGetFile(
-        precise: false,
-        cdnSupported: false,
-        location: location,
-        offset: downloadedBytes,
-        limit: chunkSize,
-      ));
+      t.TlObject? result;
+      try {
+        result = dcId != null
+            ? await _invokeOnDc(dcId, t.UploadGetFile(
+                precise: false,
+                cdnSupported: false,
+                location: location as t.InputFileLocationBase,
+                offset: downloadedBytes,
+                limit: chunkSize,
+              ))
+            : await invoke(t.UploadGetFile(
+                precise: false,
+                cdnSupported: false,
+                location: location as t.InputFileLocationBase,
+                offset: downloadedBytes,
+                limit: chunkSize,
+              ));
+      } on Object catch (e) {
+        final migrateDc = _parseFileMigrateDc(e.toString());
+        if (migrateDc != null && migrateRetryCount < 2) {
+          await connectToDc(migrateDc);
+          dcId = migrateDc;
+          migrateRetryCount++;
+          continue; // Retry the chunk on the correct DC
+        }
+        rethrow;
+      }
 
       if (result is t.UploadFile) {
         yield result.bytes;
@@ -499,6 +594,225 @@ class TeliClient {
         throw Exception('Unexpected upload response: ${result.runtimeType}');
       }
     }
+  }
+
+  /// Invoke, catching AUTH_KEY expiry and stale connections on DC clients
+  /// and auto-reconnecting.
+  ///
+  /// Handles two failure modes:
+  /// - **AUTH_KEY_***: The DC session key has expired — evict, reconnect, retry.
+  /// - **TimeoutException**: The DC socket is dead/stale (no response within
+  ///   30 s) — evict, reconnect, retry.
+  Future<t.TlObject?> _invokeOnDc(int dcId, t.TlMethod method) async {
+    try {
+      return await _invokeOnDcRaw(dcId, method);
+    } on TimeoutException {
+      // DC socket is dead/stale — evict and reconnect
+      final old = _dcPool.remove(dcId);
+      await old?.dispose();
+      await credentials.removeDcSession(dcId);
+
+      await connectToDc(dcId);
+      return await _invokeOnDcRaw(dcId, method);
+    } catch (e) {
+      final errorStr = e.toString();
+      if (errorStr.contains('AUTH_KEY_UNREGISTERED') ||
+          errorStr.contains('AUTH_KEY_INVALID')) {
+        final old = _dcPool.remove(dcId);
+        await old?.dispose();
+        await credentials.removeDcSession(dcId);
+
+        await connectToDc(dcId);
+        return await _invokeOnDcRaw(dcId, method);
+      }
+      rethrow;
+    }
+  }
+
+  /// Raw invoke on a DC client without auto-reconnect logic.
+  ///
+  /// Applies a 30-second timeout — if the DC socket is dead/stale, the
+  /// invoke will never complete (a dead TCP socket produces no error), so
+  /// we must bail out explicitly so the caller can evict and reconnect.
+  Future<t.TlObject?> _invokeOnDcRaw(int dcId, t.TlMethod method) async {
+    final dcEntry = _dcPool[dcId];
+    if (dcEntry == null || dcEntry.client == null) {
+      throw StateError(
+          'DC $dcId client not connected. Call connectToDc($dcId) first.');
+    }
+    final response = await dcEntry.client!.invoke(method).timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw TimeoutException(
+        'DC $dcId invoke timed out after 30s — likely stale connection',
+      ),
+    );
+    if (response.error != null) {
+      throw Exception(response.error!.errorMessage);
+    }
+    return response.result;
+  }
+
+  /// Ensures a client connected to [dcId] exists in the pool.
+  ///
+  /// **Restore-first strategy:**
+  /// 1. If already in pool → return immediately.
+  /// 2. If persisted DC session exists for this DC → try restoring the
+  ///    `AuthorizationKey` from JSON, connect a socket, and call
+  ///    `initConnection` with `HelpGetConfig`. On `AUTH_KEY_UNREGISTERED`,
+  ///    fall through to fresh export+import.
+  /// 3. Fresh export+import → `auth.exportAuthorization` on home DC →
+  ///    DH key exchange on target DC → `initConnection` wrapping
+  ///    `auth.importAuthorization`.
+  ///
+  /// After a successful connection (via either path), the `AuthorizationKey`
+  /// is saved via `credentials.saveDcSession` for reuse on next app launch.
+  Future<void> connectToDc(int dcId) async {
+    if (_dcPool.containsKey(dcId) && _dcPool[dcId]!.client != null) {
+      return; // Already connected
+    }
+
+    final dcHost = _dcOptions[dcId];
+    if (dcHost == null) {
+      throw StateError('Unknown DC ID: $dcId');
+    }
+
+    // ── Try restore from stored DC session ──
+    final storedKeyJson = await credentials.loadDcSession(dcId);
+    if (storedKeyJson != null) {
+      try {
+        final restored = await _connectDcWithStoredKey(dcId, dcHost, storedKeyJson);
+        _dcPool[dcId] = restored;
+        return; // Restored successfully
+      } catch (e) {
+        // Stored key is expired/invalid — fall through to fresh export+import
+        await credentials.removeDcSession(dcId);
+      }
+    }
+
+    // ── Fresh export + import ──
+    final dcEntry = await _connectDcWithExportImport(dcId, dcHost);
+    _dcPool[dcId] = dcEntry;
+  }
+
+  /// Restore a DC client using a previously saved `AuthorizationKey`.
+  ///
+  /// Connects a socket, restores the key, and calls `initConnection`.
+  /// Throws if the key is expired (e.g. `AUTH_KEY_UNREGISTERED`).
+  Future<_DcClient> _connectDcWithStoredKey(
+    int dcId,
+    _DcHost dcHost,
+    String storedKeyJson,
+  ) async {
+    final socket = await Socket.connect(
+      dcHost.ip,
+      dcHost.port,
+      timeout: const Duration(seconds: 15),
+    );
+    final teliSocket = TeliSocket(socket);
+    final obfuscation = tg.Obfuscation.random(false, dcId);
+    final idGenerator = tg.MessageIdGenerator();
+    await teliSocket.send(obfuscation.preamble);
+
+    final authKey = tg.AuthorizationKey.fromJson(
+      jsonDecode(storedKeyJson) as Map<String, dynamic>,
+    );
+
+    final dcClient = tg.Client(
+      socket: teliSocket,
+      obfuscation: obfuscation,
+      authorizationKey: authKey,
+      idGenerator: idGenerator,
+    );
+
+    await dcClient
+        .initConnection<t.Config>(
+          apiId: credentials.apiId,
+          deviceModel: 'Desktop',
+          systemVersion: 'Unknown',
+          appVersion: '1.0.0',
+          systemLangCode: 'en',
+          langPack: '',
+          langCode: 'en',
+          query: const t.HelpGetConfig(),
+        )
+        .timeout(const Duration(seconds: 20));
+
+    return _DcClient(client: dcClient, socket: teliSocket, authKey: authKey);
+  }
+
+  /// Connect a DC client via export+import authorization transfer.
+  ///
+  /// This is the full flow: export auth from home DC → DH key exchange on
+  /// target DC → initConnection wrapping `auth.importAuthorization`.
+  Future<_DcClient> _connectDcWithExportImport(
+    int dcId,
+    _DcHost dcHost,
+  ) async {
+    // 1. Export authorization from home DC
+    final exportResult = await invoke(
+      t.AuthExportAuthorization(dcId: dcId),
+    );
+    if (exportResult is! t.AuthExportedAuthorization) {
+      throw Exception(
+        'Failed to export authorization for DC $dcId: '
+        '${exportResult.runtimeType}',
+      );
+    }
+    final exported = exportResult as t.AuthExportedAuthorization;
+
+    // 2. Connect socket + DH key exchange on target DC
+    final socket = await Socket.connect(
+      dcHost.ip,
+      dcHost.port,
+      timeout: const Duration(seconds: 15),
+    );
+    final teliSocket = TeliSocket(socket);
+    final obfuscation = tg.Obfuscation.random(false, dcId);
+    final idGenerator = tg.MessageIdGenerator();
+    await teliSocket.send(obfuscation.preamble);
+
+    final authKey = await tg.Client.authorize(
+      teliSocket,
+      obfuscation,
+      idGenerator,
+    ).timeout(const Duration(seconds: 30));
+
+    final dcClient = tg.Client(
+      socket: teliSocket,
+      obfuscation: obfuscation,
+      authorizationKey: authKey,
+      idGenerator: idGenerator,
+    );
+
+    // 3. Init + import authorization
+    await dcClient
+        .initConnection<t.AuthAuthorizationBase>(
+          apiId: credentials.apiId,
+          deviceModel: 'Desktop',
+          systemVersion: 'Unknown',
+          appVersion: '1.0.0',
+          systemLangCode: 'en',
+          langPack: '',
+          langCode: 'en',
+          query: t.AuthImportAuthorization(
+            id: exported.id,
+            bytes: exported.bytes,
+          ),
+        )
+        .timeout(const Duration(seconds: 20));
+
+    // 4. Persist the auth key for future reuse
+    await credentials.saveDcSession(dcId, jsonEncode(authKey.toJson()));
+
+    return _DcClient(client: dcClient, socket: teliSocket, authKey: authKey);
+  }
+
+  /// Parse a `FILE_MIGRATE_X` error to extract the DC number.
+  ///
+  /// Returns the DC ID, or `null` if the error string doesn't match.
+  static int? _parseFileMigrateDc(String error) {
+    final match = RegExp(r'FILE_MIGRATE_(\d+)').firstMatch(error);
+    return match != null ? int.tryParse(match.group(1)!) : null;
   }
 
   /// Get the currently authenticated user.
@@ -516,6 +830,7 @@ class TeliClient {
   Future<void> logout() async {
     await invoke(const t.AuthLogOut());
     credentials.sessionData = null;
+    await credentials.clearDcSessions();
     await close();
   }
 
@@ -523,8 +838,28 @@ class TeliClient {
     await _streamSubscription?.cancel();
     await _teliSocket?.close();
     await _updateController.close();
+    // Close all DC pool connections
+    for (final dc in _dcPool.values) {
+      await dc.dispose();
+    }
+    _dcPool.clear();
     _client = null;
     _teliSocket = null;
     _streamSubscription = null;
+  }
+}
+
+/// Holds a [tg.Client] and its [TeliSocket] for a non-home DC connection.
+class _DcClient {
+  final tg.Client? client;
+  final TeliSocket? socket;
+  final tg.AuthorizationKey? authKey;
+
+  _DcClient({this.client, this.socket, this.authKey});
+
+  Future<void> dispose() async {
+    try {
+      await socket?.close();
+    } catch (_) {}
   }
 }

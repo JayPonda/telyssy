@@ -2,15 +2,28 @@
 ///
 /// Extend this class if you need custom logic for managing API credentials,
 /// phone numbers, or session persistence (e.g., storing in a database).
+///
+/// Also provides persistence hooks for per-DC authorization keys used by
+/// [TeliClient] to resolve `FILE_MIGRATE_X` errors. Implementations choose
+/// the storage backend (secure storage, database, etc.) — [TeliClient]
+/// owns all the business logic around *when* to save/load/remove.
 abstract class TeliCredentials {
   /// Internal constructor for subclasses.
   TeliCredentials._();
+
+  // ═══════════════════════════════════════════
+  //  API CREDENTIALS
+  // ═══════════════════════════════════════════
 
   /// The API ID obtained from https://my.telegram.org.
   int get apiId;
 
   /// The API Hash obtained from https://my.telegram.org.
   String get apiHash;
+
+  // ═══════════════════════════════════════════
+  //  PHONE & SESSION
+  // ═══════════════════════════════════════════
 
   /// The country code without the '+' prefix (e.g., "91" for India).
   String? get countryCode;
@@ -24,9 +37,35 @@ abstract class TeliCredentials {
   String? get phoneCodeHash;
   set phoneCodeHash(String? value);
 
-  /// The serialized session data (JSON) for persistence.
+  /// Serialized session data (JSON) for persistence.
   String? get sessionData;
   set sessionData(String? value);
+
+  // ═══════════════════════════════════════════
+  //  DC SESSION PERSISTENCE
+  // ═══════════════════════════════════════════
+
+  /// Load the serialized auth key JSON for [dcId].
+  ///
+  /// Returns `null` if no key is stored for this DC.
+  Future<String?> loadDcSession(int dcId);
+
+  /// Persist the serialized auth key JSON for [dcId].
+  Future<void> saveDcSession(int dcId, String authKeyJson);
+
+  /// Remove the stored auth key for [dcId].
+  ///
+  /// Called when a DC session is detected as expired.
+  Future<void> removeDcSession(int dcId);
+
+  /// Remove all stored DC auth keys.
+  ///
+  /// Called during logout / session nuke.
+  Future<void> clearDcSessions();
+
+  // ═══════════════════════════════════════════
+  //  VALIDATION
+  // ═══════════════════════════════════════════
 
   /// Validates the API ID and API Hash.
   void validateApiCredentials() {
@@ -122,6 +161,10 @@ abstract class TeliCredentials {
 }
 
 /// Default implementation of [TeliCredentials].
+///
+/// DC session methods use an in-memory map — sessions work within a
+/// single app lifecycle but are lost on restart. Override these methods
+/// (e.g. [SecureTeliCredentials]) to persist across restarts.
 class _TeliCredentialsImpl extends TeliCredentials {
   @override
   final int apiId;
@@ -141,6 +184,9 @@ class _TeliCredentialsImpl extends TeliCredentials {
   @override
   String? sessionData;
 
+  /// In-memory DC session store. Lost on restart unless overridden.
+  final Map<int, String> _dcSessions = {};
+
   _TeliCredentialsImpl({
     required this.apiId,
     required this.apiHash,
@@ -149,4 +195,22 @@ class _TeliCredentialsImpl extends TeliCredentials {
     this.phoneCodeHash,
     this.sessionData,
   }) : super._();
+
+  @override
+  Future<String?> loadDcSession(int dcId) async => _dcSessions[dcId];
+
+  @override
+  Future<void> saveDcSession(int dcId, String authKeyJson) async {
+    _dcSessions[dcId] = authKeyJson;
+  }
+
+  @override
+  Future<void> removeDcSession(int dcId) async {
+    _dcSessions.remove(dcId);
+  }
+
+  @override
+  Future<void> clearDcSessions() async {
+    _dcSessions.clear();
+  }
 }
