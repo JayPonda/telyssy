@@ -72,6 +72,11 @@ class TeliMessage {
           isService: true,
           mediaType: TeliMediaType.service,
         ),
+      t.MessageEmpty _ => TeliMessage(
+          id: 0,
+          date: DateTime.now(),
+          mediaType: TeliMediaType.unsupported,
+        ),
       _ => throw ArgumentError('Unsupported message type: ${raw.runtimeType}'),
     };
   }

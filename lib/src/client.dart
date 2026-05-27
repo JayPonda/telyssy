@@ -177,6 +177,130 @@ class TeliClient {
     return allMessages;
   }
 
+  /// Fetch a single message by its ID from a specific channel and return it
+  /// with fresh document references (fileReference, documentId, documentAccessHash).
+  ///
+  /// Returns `null` if the message is not found or has no media document.
+  Future<TeliMessage?> getMessageById(
+    int messageId, {
+    required int channelId,
+    required int accessHash,
+  }) async {
+    final result = await invoke(
+      t.ChannelsGetMessages(
+        channel: t.InputChannel(channelId: channelId, accessHash: accessHash),
+        id: [t.InputMessageID(id: messageId)],
+      ),
+    );
+
+    if (result is! t.MessagesMessagesBase) return null;
+
+    final messages = switch (result) {
+      t.MessagesMessages m => m.messages,
+      t.MessagesMessagesSlice m => m.messages,
+      t.MessagesChannelMessages m => m.messages,
+      t.MessagesMessagesNotModified _ => <t.MessageBase>[],
+      _ => <t.MessageBase>[],
+    };
+
+    if (messages.isEmpty) return null;
+
+    for (final msg in messages) {
+      if (msg is t.Message) {
+        return TeliMessage.fromRaw(msg);
+      }
+    }
+    return null;
+  }
+
+  /// Fetch a single message AND look up the channel access hash using
+  /// [t.MessagesGetMessages] (no peer needed). This is a fallback for when
+  /// the channel access hash is unknown.
+  ///
+  /// Returns the message and the channel's access hash extracted from the
+  /// response's chat list, or `null` if not found.
+  Future<({TeliMessage message, int channelAccessHash})?>
+      getMessageAndChannelAccessHash(
+    int messageId, {
+    required int channelId,
+  }) async {
+    print('[TeliClient] getMessageAndChannelAccessHash: '
+        'messageId=$messageId channelId=$channelId');
+    final result = await invoke(
+      t.MessagesGetMessages(id: [t.InputMessageID(id: messageId)]),
+    );
+    print('[TeliClient] getMessageAndChannelAccessHash: '
+        'result type=${result.runtimeType}');
+
+    if (result is! t.MessagesMessagesBase) {
+      print('[TeliClient] getMessageAndChannelAccessHash: '
+          'result is not MessagesMessagesBase (got ${result.runtimeType})');
+      return null;
+    }
+
+    // Extract channel access hash from the chats list
+    int? channelAccessHash;
+    final chats = switch (result) {
+      t.MessagesMessages m => m.chats,
+      t.MessagesMessagesSlice m => m.chats,
+      t.MessagesChannelMessages m => m.chats,
+      _ => <t.ChatBase>[],
+    };
+    print('[TeliClient] getMessageAndChannelAccessHash: '
+        'found ${chats.length} chats in response');
+    for (final chat in chats) {
+      if (chat is t.Channel) {
+        print('[TeliClient]   chat: id=${chat.id} type=${chat.runtimeType} '
+            'accessHash=${chat.accessHash}');
+        if (chat.id == channelId) {
+          channelAccessHash = chat.accessHash;
+          print('[TeliClient]   => matched channel, accessHash=$channelAccessHash');
+          break;
+        }
+      } else {
+        print('[TeliClient]   chat: type=${chat.runtimeType} (not a Channel)');
+      }
+    }
+    if (channelAccessHash == null) {
+      print('[TeliClient] getMessageAndChannelAccessHash: '
+          'channel $channelId not found in chats');
+      return null;
+    }
+
+    // Extract the message
+    final messages = switch (result) {
+      t.MessagesMessages m => m.messages,
+      t.MessagesMessagesSlice m => m.messages,
+      t.MessagesChannelMessages m => m.messages,
+      t.MessagesMessagesNotModified _ => <t.MessageBase>[],
+      _ => <t.MessageBase>[],
+    };
+    print('[TeliClient] getMessageAndChannelAccessHash: '
+        'found ${messages.length} messages');
+    if (messages.isEmpty) {
+      print('[TeliClient] getMessageAndChannelAccessHash: messages list empty');
+      return null;
+    }
+
+    for (final msg in messages) {
+      if (msg is t.Message) {
+        print('[TeliClient]   msg: id=${msg.id} type=${msg.runtimeType}');
+      } else {
+        print('[TeliClient]   msg: type=${msg.runtimeType} (not a Message)');
+      }
+      if (msg is t.Message) {
+        final teliMsg = TeliMessage.fromRaw(msg);
+        print('[TeliClient] getMessageAndChannelAccessHash: '
+            'found Message, documentId=${teliMsg.documentId} '
+            'fileReference=${teliMsg.fileReference != null}');
+        return (message: teliMsg, channelAccessHash: channelAccessHash);
+      }
+    }
+    print('[TeliClient] getMessageAndChannelAccessHash: '
+        'no t.Message found in messages');
+    return null;
+  }
+
   Stream<List<TeliMessage>> getMessagesStream(
     TeliChannel channel, {
     int limit = 20,
@@ -383,6 +507,18 @@ class TeliClient {
       pos += chunk.length;
     }
     return output;
+  }
+
+  /// Get the currently authenticated user.
+  Future<TeliUser?> getCurrentUser() async {
+    final result = await invoke(
+      t.UsersGetUsers(id: [const t.InputUserSelf()]),
+    );
+
+    if (result is! t.Vector) return null;
+    final users = result.items.cast<t.User>();
+    if (users.isEmpty) return null;
+    return TeliUser.fromRaw(users.first);
   }
 
   Future<void> logout() async {
