@@ -461,14 +461,15 @@ class TeliClient {
   /// [TeliMessage.documentAccessHash]. [fileReference] comes from
   /// [TeliMessage.fileReference].
   ///
-  /// Downloads in [chunkSize]-byte chunks and returns the complete raw bytes.
-  Future<Uint8List> downloadFile({
+  /// Downloads in [chunkSize]-byte chunks and yields them as they arrive.
+  Stream<Uint8List> downloadFile({
     required int documentId,
     required int accessHash,
     required Uint8List fileReference,
+    int offset = 0,
     int chunkSize = 1024 * 1024,
     void Function(int downloadedBytes)? onProgress,
-  }) async {
+  }) async* {
     final location = t.InputDocumentFileLocation(
       id: documentId,
       accessHash: accessHash,
@@ -476,8 +477,7 @@ class TeliClient {
       thumbSize: '',
     );
 
-    final chunks = <Uint8List>[];
-    int downloadedBytes = 0;
+    int downloadedBytes = offset;
 
     while (true) {
       final result = await invoke(t.UploadGetFile(
@@ -489,7 +489,7 @@ class TeliClient {
       ));
 
       if (result is t.UploadFile) {
-        chunks.add(result.bytes);
+        yield result.bytes;
         downloadedBytes += result.bytes.length;
         onProgress?.call(downloadedBytes);
         if (result.bytes.length < chunkSize) break;
@@ -499,14 +499,6 @@ class TeliClient {
         throw Exception('Unexpected upload response: ${result.runtimeType}');
       }
     }
-
-    final output = Uint8List(downloadedBytes);
-    int pos = 0;
-    for (final chunk in chunks) {
-      output.setRange(pos, pos + chunk.length, chunk);
-      pos += chunk.length;
-    }
-    return output;
   }
 
   /// Get the currently authenticated user.
