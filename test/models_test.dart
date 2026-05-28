@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:telissy/models/models.dart';
 import 'package:t/t.dart' as t;
@@ -184,6 +185,181 @@ void main() {
       final msg = TeliMessage.fromRaw(raw);
       expect(msg.id, equals(789));
       expect(msg.isService, isTrue);
+    });
+
+    test('toJson and fromJson roundtrip correctly', () {
+      final now = DateTime.now();
+      final fileRef = Uint8List.fromList([1, 2, 3, 4]);
+
+      final original = TeliMessage(
+        id: 123,
+        date: now,
+        text: 'Test message',
+        senderId: 456,
+        isService: false,
+        mediaType: TeliMediaType.photo,
+        views: 100,
+        forwards: 50,
+        editDate: now.add(Duration(hours: 1)),
+        isPost: true,
+        documentId: 789,
+        documentAccessHash: 987,
+        fileReference: fileRef,
+        documentMimeType: 'image/jpeg',
+        documentSize: 1024,
+        audioTitle: 'Song Title',
+        audioPerformer: 'Artist Name',
+        audioDuration: 180,
+        groupedId: 321,
+        photoThumbSize: 'y',
+      );
+
+      // Convert to JSON and back
+      final json = original.toJson();
+      final restored = TeliMessage.fromJson(json);
+
+      // Verify all fields match
+      expect(restored.id, equals(original.id));
+      expect(restored.date.millisecondsSinceEpoch ~/ 1000,
+             equals(original.date.millisecondsSinceEpoch ~/ 1000)); // Compare as seconds
+      expect(restored.text, equals(original.text));
+      expect(restored.senderId, equals(original.senderId));
+      expect(restored.isService, equals(original.isService));
+      expect(restored.mediaType, equals(original.mediaType));
+      expect(restored.views, equals(original.views));
+      expect(restored.forwards, equals(original.forwards));
+      expect(restored.editDate != null ? restored.editDate!.millisecondsSinceEpoch ~/ 1000 : null,
+             equals(original.editDate != null ? original.editDate!.millisecondsSinceEpoch ~/ 1000 : null)); // Compare as seconds
+      expect(restored.isPost, equals(original.isPost));
+      expect(restored.documentId, equals(original.documentId));
+      expect(restored.documentAccessHash, equals(original.documentAccessHash));
+      expect(restored.fileReference, equals(original.fileReference));
+      expect(restored.documentMimeType, equals(original.documentMimeType));
+      expect(restored.documentSize, equals(original.documentSize));
+      expect(restored.audioTitle, equals(original.audioTitle));
+      expect(restored.audioPerformer, equals(original.audioPerformer));
+      expect(restored.audioDuration, equals(original.audioDuration));
+      expect(restored.groupedId, equals(original.groupedId));
+      expect(restored.photoThumbSize, equals(original.photoThumbSize));
+    });
+
+    test('toJson and fromJson handle null values correctly', () {
+      final now = DateTime.now();
+
+      final original = TeliMessage(
+        id: 123,
+        date: now,
+        // All other fields are null by default
+      );
+
+      // Convert to JSON and back
+      final json = original.toJson();
+      final restored = TeliMessage.fromJson(json);
+
+      // Verify all fields match
+      expect(restored.id, equals(original.id));
+      expect(restored.date.millisecondsSinceEpoch ~/ 1000,
+             equals(original.date.millisecondsSinceEpoch ~/ 1000)); // Compare as seconds
+      expect(restored.text, isNull);
+      expect(restored.senderId, isNull);
+      expect(restored.isService, equals(original.isService));
+      expect(restored.mediaType, equals(original.mediaType));
+      expect(restored.views, isNull);
+      expect(restored.forwards, isNull);
+      expect(restored.editDate, isNull);
+      expect(restored.isPost, equals(original.isPost));
+      expect(restored.documentId, isNull);
+      expect(restored.documentAccessHash, isNull);
+      expect(restored.fileReference, isNull);
+      expect(restored.documentMimeType, isNull);
+      expect(restored.documentSize, isNull);
+      expect(restored.audioTitle, isNull);
+      expect(restored.audioPerformer, isNull);
+      expect(restored.audioDuration, isNull);
+      expect(restored.groupedId, isNull);
+      expect(restored.photoThumbSize, isNull);
+    });
+
+    test('fromJson ignores unknown keys', () {
+      final json = <String, dynamic>{
+        'id': 123,
+        'date': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'text': 'Test message',
+        'unknown_field': 'should_be_ignored',
+        'another_unknown': 42,
+      };
+
+      // Should not throw an exception
+      final restored = TeliMessage.fromJson(json);
+
+      expect(restored.id, equals(123));
+      expect(restored.text, equals('Test message'));
+    });
+  });
+
+  group('TeliChannel toJson/fromJson', () {
+    test('toJson and fromJson roundtrip correctly', () {
+      final original = TeliChannel(
+        id: 123,
+        title: 'Test Channel',
+        accessHash: 456,
+        isChannel: true,
+        isBroadcast: true,
+        isForbidden: false,
+        username: 'test_channel',
+        participantsCount: 1000,
+      );
+
+      // Convert to JSON and back
+      final json = original.toJson();
+      final restored = TeliChannel.fromJson(json);
+
+      // Verify all fields match
+      expect(restored.id, equals(original.id));
+      expect(restored.title, equals(original.title));
+      expect(restored.accessHash, equals(original.accessHash));
+      expect(restored.isChannel, equals(original.isChannel));
+      expect(restored.isBroadcast, equals(original.isBroadcast));
+      expect(restored.isForbidden, equals(original.isForbidden));
+      expect(restored.username, equals(original.username));
+      expect(restored.participantsCount, equals(original.participantsCount));
+    });
+
+    test('toJson and fromJson handle null values correctly', () {
+      final original = TeliChannel(
+        id: 123,
+        title: 'Test Channel',
+        // All other fields are null by default
+      );
+
+      // Convert to JSON and back
+      final json = original.toJson();
+      final restored = TeliChannel.fromJson(json);
+
+      // Verify all fields match
+      expect(restored.id, equals(original.id));
+      expect(restored.title, equals(original.title));
+      expect(restored.accessHash, isNull);
+      expect(restored.isChannel, equals(original.isChannel));
+      expect(restored.isBroadcast, equals(original.isBroadcast));
+      expect(restored.isForbidden, equals(original.isForbidden));
+      expect(restored.username, isNull);
+      expect(restored.participantsCount, isNull);
+    });
+
+    test('fromJson ignores unknown keys', () {
+      final json = <String, dynamic>{
+        'id': 123,
+        'title': 'Test Channel',
+        'unknown_field': 'should_be_ignored',
+        'another_unknown': 42,
+      };
+
+      // Should not throw an exception
+      final restored = TeliChannel.fromJson(json);
+
+      expect(restored.id, equals(123));
+      expect(restored.title, equals('Test Channel'));
     });
   });
 }

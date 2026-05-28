@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:t/t.dart' as t;
 
 /// Represents a Telegram channel, supergroup, or legacy chat.
@@ -68,6 +69,36 @@ class TeliChannel {
         ),
       _ => const TeliChannel(id: 0, title: 'Unknown', isForbidden: true),
     };
+  }
+
+  /// Serialize this channel to a JSON map suitable for isolate transfer.
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'accessHash': accessHash,
+      'isChannel': isChannel,
+      'isBroadcast': isBroadcast,
+      'isForbidden': isForbidden,
+      'username': username,
+      'participantsCount': participantsCount,
+    };
+  }
+
+  /// Deserialize a channel from a JSON map.
+  ///
+  /// Unknown keys are silently ignored.
+  static TeliChannel fromJson(Map<String, dynamic> json) {
+    return TeliChannel(
+      id: json['id'] as int,
+      title: json['title'] as String,
+      accessHash: json['accessHash'] as int?,
+      isChannel: json['isChannel'] as bool? ?? false,
+      isBroadcast: json['isBroadcast'] as bool? ?? false,
+      isForbidden: json['isForbidden'] as bool? ?? false,
+      username: json['username'] as String?,
+      participantsCount: json['participantsCount'] as int?,
+    );
   }
 
   @override

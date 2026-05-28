@@ -199,10 +199,78 @@ class TeliClient {
     return allMessages;
   }
 
-  /// Fetch a single message by its ID from a specific channel and return it
-  /// with fresh document references (fileReference, documentId, documentAccessHash).
+  /// Re-fetch a message to obtain a fresh file reference.
   ///
-  /// Returns `null` if the message is not found or has no media document.
+  /// When Telegram returns `FILE_REFERENCE_EXPIRED`, use this method to
+  /// get updated `documentId`, `documentAccessHash`, and `fileReference`
+  /// fields for a message's media attachment.
+  ///
+  /// - If [channelAccessHash] is provided, uses `ChannelsGetMessages` directly.
+  /// - If not, falls back to `MessagesGetMessages` and extracts the
+  ///   access hash from the response's chat list.
+  ///
+  /// Returns `null` if the message is not found or has no media.
+  /// Throws on network errors (caller decides whether to retry).
+  Future<TeliMessage?> refreshFileReference(
+    int messageId, {
+    required int channelId,
+    int? channelAccessHash,
+  }) async {
+    if (channelAccessHash != null) {
+      return getMessageById(
+        messageId,
+        channelId: channelId,
+        accessHash: channelAccessHash,
+      );
+    }
+
+    // Fallback: no access hash — use MessagesGetMessages without peer
+    final result = await invoke(
+      t.MessagesGetMessages(id: [t.InputMessageID(id: messageId)]),
+    );
+
+    if (result is! t.MessagesMessagesBase) return null;
+
+    // Extract the access hash from the chats list
+    int? resolvedAccessHash;
+    final chats = switch (result) {
+      t.MessagesMessages m => m.chats,
+      t.MessagesMessagesSlice m => m.chats,
+      t.MessagesChannelMessages m => m.chats,
+      _ => <t.ChatBase>[],
+    };
+    for (final chat in chats) {
+      if (chat is t.Channel && chat.id == channelId) {
+        resolvedAccessHash = chat.accessHash;
+        break;
+      }
+    }
+    if (resolvedAccessHash == null) return null;
+
+    // Extract the message
+    final messages = switch (result) {
+      t.MessagesMessages m => m.messages,
+      t.MessagesMessagesSlice m => m.messages,
+      t.MessagesChannelMessages m => m.messages,
+      t.MessagesMessagesNotModified _ => <t.MessageBase>[],
+      _ => <t.MessageBase>[],
+    };
+    if (messages.isEmpty) return null;
+
+    for (final msg in messages) {
+      if (msg is t.Message) {
+        final teliMsg = TeliMessage.fromRaw(msg);
+        if (teliMsg.documentId != null && teliMsg.fileReference != null) {
+          return teliMsg;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Fetch a single message by its ID from a specific channel.
+  ///
+  /// Returns `null` if the message is not found.
   Future<TeliMessage?> getMessageById(
     int messageId, {
     required int channelId,
@@ -538,6 +606,186 @@ class TeliClient {
       chunkSize: chunkSize,
       onProgress: onProgress,
     );
+  }
+
+  /// High-level download API that writes chunks directly to a file.
+  ///
+  /// This method owns the [IOSink] lifecycle and handles protocol errors
+  /// internally so that callers never need to manage file handles or
+  /// retry logic:
+  ///
+  /// - **FILE_MIGRATE_X**: Connects to the correct DC and restarts.
+  /// - **OFFSET_INVALID**: Restarts from offset 0, truncates the file, continues.
+  /// - **FILE_REFERENCE_EXPIRED**: Re-fetches the message via
+  ///   [refreshFileReference] to obtain a fresh file reference, then retries.
+  ///
+  /// Returns a progress stream that emits 0.0–1.0, completes on success,
+  /// and throws on unrecoverable errors.
+  ///
+  /// To cancel, call `StreamSubscription.cancel()` on the returned stream.
+  /// Partial file data remains on disk.
+  ///
+  /// To resume, pass [offset] matching the already-downloaded bytes.
+  Stream<double> downloadToFile({
+    required String filePath,
+    required int documentId,
+    required int accessHash,
+    required Uint8List fileReference,
+    required String mediaType,
+    String? thumbSize,
+    int channelId = 0,
+    int? channelAccessHash,
+    int messageId = 0,
+    int offset = 0,
+    int? fileSize,
+    int chunkSize = 1024 * 1024,
+  }) {
+    return _downloadToFileWithRetry(
+      filePath: filePath,
+      documentId: documentId,
+      accessHash: accessHash,
+      fileReference: fileReference,
+      mediaType: mediaType,
+      thumbSize: thumbSize,
+      channelId: channelId,
+      channelAccessHash: channelAccessHash,
+      messageId: messageId,
+      offset: offset,
+      fileSize: fileSize,
+      chunkSize: chunkSize,
+      freRetryCount: 0,
+    );
+  }
+
+  /// Internal retry loop for [downloadToFile].
+  ///
+  /// Handles FILE_REFERENCE_EXPIRED by refreshing and retrying (up to 2 times),
+  /// and OFFSET_INVALID by restarting from offset 0.
+  Stream<double> _downloadToFileWithRetry({
+    required String filePath,
+    required int documentId,
+    required int accessHash,
+    required Uint8List fileReference,
+    required String mediaType,
+    required String? thumbSize,
+    required int channelId,
+    required int? channelAccessHash,
+    required int messageId,
+    required int offset,
+    required int? fileSize,
+    required int chunkSize,
+    required int freRetryCount,
+  }) async* {
+    final isPhoto = mediaType == 'photo';
+    final location = isPhoto
+        ? t.InputPhotoFileLocation(
+            id: documentId,
+            accessHash: accessHash,
+            fileReference: fileReference,
+            thumbSize: thumbSize ?? 'y',
+          )
+        : t.InputDocumentFileLocation(
+            id: documentId,
+            accessHash: accessHash,
+            fileReference: fileReference,
+            thumbSize: '',
+          );
+
+    final file = File(filePath);
+    int downloadedBytes = offset;
+
+    // Open the file for writing — append if resuming, write-only otherwise
+    final sink = file.openWrite(
+      mode: offset > 0 ? FileMode.append : FileMode.writeOnly,
+    );
+
+    try {
+      await for (final chunk in _downloadWithDcMigration(
+        location: location,
+        offset: offset,
+        chunkSize: chunkSize,
+      )) {
+        sink.add(chunk);
+        downloadedBytes += chunk.length;
+        final progress =
+            fileSize != null && fileSize > 0 ? downloadedBytes / fileSize : 0.0;
+        yield progress;
+      }
+
+      await sink.flush();
+      await sink.close();
+    } on Object catch (e) {
+      // Ensure sink is closed on error so we don't leak file handles
+      try {
+        await sink.close();
+      } catch (_) {}
+
+      final errorStr = e.toString();
+
+      // OFFSET_INVALID — restart from offset 0
+      if (errorStr.contains('OFFSET_INVALID') && offset > 0) {
+        // Truncate the file and restart
+        if (await file.exists()) {
+          await file.writeAsBytes([]);
+        }
+        yield* _downloadToFileWithRetry(
+          filePath: filePath,
+          documentId: documentId,
+          accessHash: accessHash,
+          fileReference: fileReference,
+          mediaType: mediaType,
+          thumbSize: thumbSize,
+          channelId: channelId,
+          channelAccessHash: channelAccessHash,
+          messageId: messageId,
+          offset: 0,
+          fileSize: fileSize,
+          chunkSize: chunkSize,
+          freRetryCount: freRetryCount,
+        );
+        return;
+      }
+
+      // FILE_REFERENCE_EXPIRED — refresh and retry (max 2 times)
+      if (freRetryCount < 2 &&
+          (errorStr.contains('FILE_REFERENCE_EXPIRED') ||
+              errorStr.contains('FILE_REFERENCE')) &&
+          channelId != 0 &&
+          messageId != 0) {
+        final freshMessage = await refreshFileReference(
+          messageId,
+          channelId: channelId,
+          channelAccessHash: channelAccessHash,
+        );
+
+        if (freshMessage != null &&
+            freshMessage.documentId != null &&
+            freshMessage.fileReference != null) {
+          // Truncate the file for a fresh start
+          if (await file.exists()) {
+            await file.writeAsBytes([]);
+          }
+          yield* _downloadToFileWithRetry(
+            filePath: filePath,
+            documentId: freshMessage.documentId!,
+            accessHash: freshMessage.documentAccessHash ?? accessHash,
+            fileReference: freshMessage.fileReference!,
+            mediaType: mediaType,
+            thumbSize: freshMessage.photoThumbSize ?? thumbSize,
+            channelId: channelId,
+            channelAccessHash: channelAccessHash ?? 0,
+            messageId: messageId,
+            offset: 0,
+            fileSize: fileSize,
+            chunkSize: chunkSize,
+            freRetryCount: freRetryCount + 1,
+          );
+          return;
+        }
+      }
+
+      rethrow;
+    }
   }
 
   /// Core download stream with automatic FILE_MIGRATE_X handling.

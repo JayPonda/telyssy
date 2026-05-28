@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:t/t.dart' as t;
 
@@ -204,6 +205,77 @@ class TeliMessage {
     }
 
     return TeliMediaType.document;
+  }
+
+  /// Serialize this message to a JSON map suitable for isolate transfer.
+  ///
+  /// [Uint8List.fileReference] is encoded as base64.
+  /// [DateTime] fields are stored as epoch seconds.
+  /// [TeliMediaType] is stored by name.
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'date': date.millisecondsSinceEpoch ~/ 1000,
+      'text': text,
+      'senderId': senderId,
+      'isService': isService,
+      'mediaType': mediaType.name,
+      'views': views,
+      'forwards': forwards,
+      'editDate': editDate?.millisecondsSinceEpoch,
+      'isPost': isPost,
+      'documentId': documentId,
+      'documentAccessHash': documentAccessHash,
+      'fileReference': fileReference != null ? base64Encode(fileReference!) : null,
+      'documentMimeType': documentMimeType,
+      'documentSize': documentSize,
+      'audioTitle': audioTitle,
+      'audioPerformer': audioPerformer,
+      'audioDuration': audioDuration,
+      'groupedId': groupedId,
+      'photoThumbSize': photoThumbSize,
+    };
+  }
+
+  /// Deserialize a message from a JSON map.
+  ///
+  /// This is the inverse of [toJson]. Unknown keys are silently ignored
+  /// so that new fields added to [toJson] don't crash older consumers.
+  static TeliMessage fromJson(Map<String, dynamic> json) {
+    return TeliMessage(
+      id: json['id'] as int,
+      date: DateTime.fromMillisecondsSinceEpoch((json['date'] as int) * 1000),
+      text: json['text'] as String?,
+      senderId: json['senderId'] as int?,
+      isService: json['isService'] as bool? ?? false,
+      mediaType: _mediaTypeFromName(json['mediaType'] as String?),
+      views: json['views'] as int?,
+      forwards: json['forwards'] as int?,
+      editDate: json['editDate'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(json['editDate'] as int)
+          : null,
+      isPost: json['isPost'] as bool? ?? false,
+      documentId: json['documentId'] as int?,
+      documentAccessHash: json['documentAccessHash'] as int?,
+      fileReference: json['fileReference'] != null
+          ? base64Decode(json['fileReference'] as String)
+          : null,
+      documentMimeType: json['documentMimeType'] as String?,
+      documentSize: json['documentSize'] as int?,
+      audioTitle: json['audioTitle'] as String?,
+      audioPerformer: json['audioPerformer'] as String?,
+      audioDuration: json['audioDuration'] as int?,
+      groupedId: json['groupedId'] as int?,
+      photoThumbSize: json['photoThumbSize'] as String?,
+    );
+  }
+
+  static TeliMediaType _mediaTypeFromName(String? name) {
+    if (name == null) return TeliMediaType.text;
+    return TeliMediaType.values.firstWhere(
+      (e) => e.name == name,
+      orElse: () => TeliMediaType.text,
+    );
   }
 
   @override
