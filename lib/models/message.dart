@@ -19,7 +19,19 @@ enum TeliMediaType {
   invoice,
   story,
   unsupported,
-  service,
+  service;
+
+  /// Parse a media type string (e.g. from DB) into a [TeliMediaType].
+  ///
+  /// Returns [TeliMediaType.text] for null or unrecognized values,
+  /// matching the convention used throughout the app.
+  static TeliMediaType fromString(String? name) {
+    if (name == null) return TeliMediaType.text;
+    return TeliMediaType.values.firstWhere(
+      (e) => e.name == name,
+      orElse: () => TeliMediaType.text,
+    );
+  }
 }
 
 /// Represents a message in Telegram.
@@ -248,7 +260,7 @@ class TeliMessage {
       text: json['text'] as String?,
       senderId: json['senderId'] as int?,
       isService: json['isService'] as bool? ?? false,
-      mediaType: _mediaTypeFromName(json['mediaType'] as String?),
+      mediaType: TeliMediaType.fromString(json['mediaType'] as String?),
       views: json['views'] as int?,
       forwards: json['forwards'] as int?,
       editDate: json['editDate'] != null
@@ -267,14 +279,6 @@ class TeliMessage {
       audioDuration: json['audioDuration'] as int?,
       groupedId: json['groupedId'] as int?,
       photoThumbSize: json['photoThumbSize'] as String?,
-    );
-  }
-
-  static TeliMediaType _mediaTypeFromName(String? name) {
-    if (name == null) return TeliMediaType.text;
-    return TeliMediaType.values.firstWhere(
-      (e) => e.name == name,
-      orElse: () => TeliMediaType.text,
     );
   }
 
