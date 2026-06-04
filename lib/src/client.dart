@@ -6,6 +6,7 @@ import 'package:t/t.dart' as t;
 import 'package:tg/tg.dart' as tg;
 
 import 'socket.dart';
+import 'logger.dart';
 import '../models/models.dart';
 
 /// Known Telegram datacenter IPs and ports.
@@ -314,17 +315,15 @@ class TeliClient {
     int messageId, {
     required int channelId,
   }) async {
-    print('[TeliClient] getMessageAndChannelAccessHash: '
-        'messageId=$messageId channelId=$channelId');
+    log.d('getMessageAndChannelAccessHash: messageId=$messageId channelId=$channelId');
     final result = await invoke(
       t.MessagesGetMessages(id: [t.InputMessageID(id: messageId)]),
     );
-    print('[TeliClient] getMessageAndChannelAccessHash: '
-        'result type=${result.runtimeType}');
+    log.d('getMessageAndChannelAccessHash: result type=${result.runtimeType}');
 
     if (result is! t.MessagesMessagesBase) {
-      print('[TeliClient] getMessageAndChannelAccessHash: '
-          'result is not MessagesMessagesBase (got ${result.runtimeType})');
+      log.d('getMessageAndChannelAccessHash: result is not MessagesMessagesBase '
+          '(got ${result.runtimeType})');
       return null;
     }
 
@@ -336,24 +335,22 @@ class TeliClient {
       t.MessagesChannelMessages m => m.chats,
       _ => <t.ChatBase>[],
     };
-    print('[TeliClient] getMessageAndChannelAccessHash: '
-        'found ${chats.length} chats in response');
+    log.d('getMessageAndChannelAccessHash: found ${chats.length} chats in response');
     for (final chat in chats) {
       if (chat is t.Channel) {
-        print('[TeliClient]   chat: id=${chat.id} type=${chat.runtimeType} '
+        log.d('  chat: id=${chat.id} type=${chat.runtimeType} '
             'accessHash=${chat.accessHash}');
         if (chat.id == channelId) {
           channelAccessHash = chat.accessHash;
-          print('[TeliClient]   => matched channel, accessHash=$channelAccessHash');
+          log.d('  => matched channel, accessHash=$channelAccessHash');
           break;
         }
       } else {
-        print('[TeliClient]   chat: type=${chat.runtimeType} (not a Channel)');
+        log.d('  chat: type=${chat.runtimeType} (not a Channel)');
       }
     }
     if (channelAccessHash == null) {
-      print('[TeliClient] getMessageAndChannelAccessHash: '
-          'channel $channelId not found in chats');
+      log.d('getMessageAndChannelAccessHash: channel $channelId not found in chats');
       return null;
     }
 
@@ -365,29 +362,27 @@ class TeliClient {
       t.MessagesMessagesNotModified _ => <t.MessageBase>[],
       _ => <t.MessageBase>[],
     };
-    print('[TeliClient] getMessageAndChannelAccessHash: '
-        'found ${messages.length} messages');
+    log.d('getMessageAndChannelAccessHash: found ${messages.length} messages');
     if (messages.isEmpty) {
-      print('[TeliClient] getMessageAndChannelAccessHash: messages list empty');
+      log.d('getMessageAndChannelAccessHash: messages list empty');
       return null;
     }
 
     for (final msg in messages) {
       if (msg is t.Message) {
-        print('[TeliClient]   msg: id=${msg.id} type=${msg.runtimeType}');
+        log.d('  msg: id=${msg.id} type=${msg.runtimeType}');
       } else {
-        print('[TeliClient]   msg: type=${msg.runtimeType} (not a Message)');
+        log.d('  msg: type=${msg.runtimeType} (not a Message)');
       }
       if (msg is t.Message) {
         final teliMsg = TeliMessage.fromRaw(msg);
-        print('[TeliClient] getMessageAndChannelAccessHash: '
-            'found Message, documentId=${teliMsg.documentId} '
+        log.d('getMessageAndChannelAccessHash: found Message, '
+            'documentId=${teliMsg.documentId} '
             'fileReference=${teliMsg.fileReference != null}');
         return (message: teliMsg, channelAccessHash: channelAccessHash);
       }
     }
-    print('[TeliClient] getMessageAndChannelAccessHash: '
-        'no t.Message found in messages');
+    log.d('getMessageAndChannelAccessHash: no t.Message found in messages');
     return null;
   }
 

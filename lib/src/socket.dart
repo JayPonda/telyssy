@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:tg/tg.dart' as tg;
 
+import 'logger.dart';
+
 /// A [tg.SocketAbstraction] implementation that wraps a standard [Socket].
 ///
 /// This class facilitates communication between the [tg.Client] and the
@@ -26,8 +28,8 @@ class TeliSocket extends tg.SocketAbstraction {
 
   /// Closes the underlying socket.
   Future<void> close() async {
-    print('[Socket] Closing network connection...');
+    log.d('Closing network connection...');
     await socket.close();
-    print('[Socket] Network connection closed.');
+    log.d('Network connection closed.');
   }
 }

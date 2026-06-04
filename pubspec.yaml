@@ -11,6 +11,7 @@ dependencies:
   tg: ^0.0.19
   t: ^225.0.0
   meta: ^1.18.2
+  logger: ^2.4.0
 
 dev_dependencies:
   build_runner: ^2.15.0
