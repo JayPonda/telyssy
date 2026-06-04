@@ -21,11 +21,13 @@ class _TimestampPrinter extends LogPrinter {
     return [line.toString()];
   }
 
+  // ignore_for_file: deprecated_member_use
+
   static AnsiColor _colorFor(Level level) {
     switch (level) {
       case Level.all:
-      case Level.trace:
       case Level.verbose:
+      case Level.trace:
       case Level.debug:
         return const AnsiColor.fg(8);
       case Level.info:

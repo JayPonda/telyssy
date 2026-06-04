@@ -162,7 +162,7 @@ final class TeliAuth {
       log.i('No valid session — proceeding with OTP login');
       return await _sendCode();
     } catch (e) {
-      log.e('Login failed', e);
+      log.e('Login failed', error: e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -203,7 +203,7 @@ final class TeliAuth {
 
       return const TeliAuthWaitOtp();
     } catch (e) {
-      log.e('sendCode error', e);
+      log.e('sendCode error', error: e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -245,7 +245,7 @@ final class TeliAuth {
       await dispose();
       return result;
     } catch (e) {
-      log.e('submitOtp error', e);
+      log.e('submitOtp error', error: e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -268,7 +268,7 @@ final class TeliAuth {
       await dispose();
       return err;
     } catch (e) {
-      log.e('getPassword error', e);
+      log.e('getPassword error', error: e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -315,7 +315,7 @@ final class TeliAuth {
       await dispose();
       return result;
     } catch (e) {
-      log.e('submitPassword error', e);
+      log.e('submitPassword error', error: e);
       await dispose();
       return TeliAuthError(e.toString());
     }

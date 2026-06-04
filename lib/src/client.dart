@@ -1067,7 +1067,7 @@ class TeliClient {
         '${exportResult.runtimeType}',
       );
     }
-    final exported = exportResult as t.AuthExportedAuthorization;
+    final exported = exportResult;
 
     // 2. Connect socket + DH key exchange on target DC
     final socket = await Socket.connect(
@@ -1141,7 +1141,8 @@ class TeliClient {
       return null;
     }
     final user = TeliUser.fromRaw(users.first);
-    log.i('Current user: ${user.displayName} (ID: ${user.id})');
+    final name = '${user.firstName ?? ''} ${user.lastName ?? ''}'.trim();
+    log.i('Current user: $name (ID: ${user.id})');
     return user;
   }
 
