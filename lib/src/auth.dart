@@ -6,6 +6,7 @@ import 'package:t/t.dart' as t;
 import 'package:tg/tg.dart' as tg;
 
 import '../models/models.dart';
+import 'logger.dart';
 import 'socket.dart';
 
 /// Timeout for establishing the TCP connection to Telegram.
@@ -49,6 +50,7 @@ final class TeliAuth {
     int? dcId,
     int retryCount = 0,
   }) async {
+    log.i('Login attempt${retryCount > 0 ? ' (retry $retryCount)' : ''}');
     try {
       final host = credentials.getHost();
       ip ??= host.ip;
@@ -58,6 +60,7 @@ final class TeliAuth {
       credentials.validateApiCredentials();
 
       if (_teliSocket == null) {
+        log.d('Connecting socket to $ip:$port (DC $dcId)');
         final socket = await Socket.connect(
           ip,
           port,
@@ -79,10 +82,14 @@ final class TeliAuth {
             authKey = tg.AuthorizationKey.fromJson(
               jsonDecode(sessionData) as Map<String, dynamic>,
             );
-          } catch (_) {}
+            log.d('Restored auth key from session data');
+          } catch (_) {
+            log.w('Failed to parse stored session data');
+          }
         }
 
         if (authKey == null) {
+          log.d('No stored session — performing DH key exchange');
           authKey = await tg.Client.authorize(
             _teliSocket!,
             obfuscation,
@@ -98,6 +105,7 @@ final class TeliAuth {
           idGenerator: idGenerator,
         );
 
+        log.d('Initializing connection (HelpGetConfig)');
         await _client!
             .initConnection<t.Config>(
               apiId: credentials.apiId,
@@ -121,6 +129,7 @@ final class TeliAuth {
             .timeout(_invokeTimeout);
         if (userResponse.result is t.Vector &&
             (userResponse.result as t.Vector).items.isNotEmpty) {
+          log.i('Session valid — user already authenticated');
           final result = TeliAuthSuccess(
             credentials,
             rawData: userResponse.result,
@@ -131,7 +140,9 @@ final class TeliAuth {
       } catch (e) {
         if (e.toString().contains('AUTH_KEY_UNREGISTERED') ||
             e.toString().contains('AUTH_RESTART')) {
+          log.w('Session expired ($e) — retrying login');
           if (retryCount >= _maxLoginRetries) {
+            log.e('Login failed after $_maxLoginRetries retries');
             await dispose();
             return TeliAuthError(
               'Authentication failed after $_maxLoginRetries retries.',
@@ -148,14 +159,17 @@ final class TeliAuth {
         }
       }
 
+      log.i('No valid session — proceeding with OTP login');
       return await _sendCode();
     } catch (e) {
+      log.e('Login failed', e);
       await dispose();
       return TeliAuthError(e.toString());
     }
   }
 
   Future<TeliAuthState> _sendCode() async {
+    log.i('Sending OTP code');
     try {
       final fullPhone = credentials.validatePhoneNumber();
 
@@ -177,6 +191,7 @@ final class TeliAuth {
           .timeout(_invokeTimeout);
 
       if (response.error != null) {
+        log.e('sendCode failed: ${response.error!.errorMessage}');
         final err = TeliAuthError(response.error!.errorMessage);
         await dispose();
         return err;
@@ -184,9 +199,11 @@ final class TeliAuth {
 
       final sentCode = response.result as t.AuthSentCode;
       credentials.phoneCodeHash = sentCode.phoneCodeHash;
+      log.i('OTP sent — awaiting user input');
 
       return const TeliAuthWaitOtp();
     } catch (e) {
+      log.e('sendCode error', e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -194,6 +211,7 @@ final class TeliAuth {
 
   /// Submits the OTP code received by the user.
   Future<TeliAuthState> submitOtp(String code) async {
+    log.i('Submitting OTP');
     if (_client == null) return const TeliAuthError('Client not initialized.');
 
     try {
@@ -209,14 +227,17 @@ final class TeliAuth {
 
       if (signInResponse.error != null) {
         if (signInResponse.error!.errorMessage == 'SESSION_PASSWORD_NEEDED') {
+          log.i('2FA required — redirecting to password flow');
           return await _get2faState();
         }
+        log.e('signIn failed: ${signInResponse.error!.errorMessage}');
         final err = TeliAuthError(signInResponse.error!.errorMessage);
         await dispose();
         return err;
       }
 
       credentials.sessionData = jsonEncode(_client!.authorizationKey.toJson());
+      log.i('Sign-in successful');
       final result = TeliAuthSuccess(
         credentials,
         rawData: signInResponse.result,
@@ -224,12 +245,14 @@ final class TeliAuth {
       await dispose();
       return result;
     } catch (e) {
+      log.e('submitOtp error', e);
       await dispose();
       return TeliAuthError(e.toString());
     }
   }
 
   Future<TeliAuthState> _get2faState() async {
+    log.d('Fetching 2FA password info');
     try {
       final response = await _client!
           .account
@@ -237,12 +260,15 @@ final class TeliAuth {
           .timeout(_invokeTimeout);
       if (response.result is t.AccountPassword) {
         final pwd = response.result as t.AccountPassword;
+        log.i('2FA required — hint: ${pwd.hint ?? "none"}');
         return TeliAuthWaitPassword(pwd.hint ?? '');
       }
+      log.e('getPassword returned unexpected type: ${response.result.runtimeType}');
       final err = const TeliAuthError('Failed to retrieve 2FA details.');
       await dispose();
       return err;
     } catch (e) {
+      log.e('getPassword error', e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -250,6 +276,7 @@ final class TeliAuth {
 
   /// Submits the 2FA password.
   Future<TeliAuthState> submitPassword(String password) async {
+    log.i('Submitting 2FA password');
     if (_client == null) return const TeliAuthError('Client not initialized.');
 
     try {
@@ -258,12 +285,14 @@ final class TeliAuth {
           .getPassword()
           .timeout(_invokeTimeout);
       if (response.result is! t.AccountPassword) {
+        log.e('getPassword returned unexpected type: ${response.result.runtimeType}');
         final err = const TeliAuthError('Failed to retrieve 2FA details.');
         await dispose();
         return err;
       }
 
       final accountPassword = response.result as t.AccountPassword;
+      log.d('Calculating SRP for 2FA');
       final srp = await tg.check2FA(accountPassword, password);
       final checkPasswordResponse = await _client!
           .auth
@@ -271,12 +300,14 @@ final class TeliAuth {
           .timeout(_invokeTimeout);
 
       if (checkPasswordResponse.error != null) {
+        log.e('checkPassword failed: ${checkPasswordResponse.error!.errorMessage}');
         final err = TeliAuthError(checkPasswordResponse.error!.errorMessage);
         await dispose();
         return err;
       }
 
       credentials.sessionData = jsonEncode(_client!.authorizationKey.toJson());
+      log.i('2FA sign-in successful');
       final result = TeliAuthSuccess(
         credentials,
         rawData: checkPasswordResponse.result,
@@ -284,6 +315,7 @@ final class TeliAuth {
       await dispose();
       return result;
     } catch (e) {
+      log.e('submitPassword error', e);
       await dispose();
       return TeliAuthError(e.toString());
     }
@@ -291,6 +323,7 @@ final class TeliAuth {
 
   /// Closes the underlying connection.
   Future<void> dispose() async {
+    log.d('Disposing TeliAuth');
     await _teliSocket?.close();
     _client = null;
     _teliSocket = null;

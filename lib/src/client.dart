@@ -58,6 +58,7 @@ class TeliClient {
     ip ??= host.ip;
     port ??= host.port;
     dcId ??= host.dcId;
+    log.i('Connecting to DC $dcId ($ip:$port)');
 
     final sessionData = credentials.sessionData;
     if (sessionData == null || sessionData.isEmpty) {
@@ -73,6 +74,7 @@ class TeliClient {
         timeout: const Duration(seconds: 15),
       );
       _teliSocket = TeliSocket(socket);
+      log.d('Socket connected');
     }
 
     final obfuscation = tg.Obfuscation.random(false, dcId);
@@ -92,6 +94,7 @@ class TeliClient {
         idGenerator: idGenerator,
       );
 
+      log.d('Initializing connection (HelpGetConfig)');
       await _client!.initConnection<t.Config>(
         apiId: credentials.apiId,
         deviceModel: 'Desktop',
@@ -109,6 +112,7 @@ class TeliClient {
         _updateController.add(event);
       }
     });
+    log.i('Client connected and listening for updates');
   }
 
   void onUpdate(FutureOr<void> Function(dynamic data) callback) {
@@ -120,14 +124,19 @@ class TeliClient {
   Future<t.TlObject?> invoke(t.TlMethod method) async {
     final client = _client;
     if (client == null) throw StateError('Client not connected.');
+    log.d('invoke: ${method.runtimeType}');
     final response = await client.invoke(method);
-    if (response.error != null) throw Exception(response.error!.errorMessage);
+    if (response.error != null) {
+      log.e('invoke failed: ${response.error!.errorMessage}');
+      throw Exception(response.error!.errorMessage);
+    }
     return response.result;
   }
 
   Future<List<TeliChannel>> getSubscribedChannels({
     int limit = 100,
   }) async {
+    log.i('Fetching subscribed channels (limit=$limit)');
     final result = await invoke(
       t.MessagesGetDialogs(
         excludePinned: false,
@@ -146,8 +155,10 @@ class TeliClient {
         t.MessagesDialogsNotModified _ => <t.ChatBase>[],
         _ => <t.ChatBase>[],
       };
+      log.i('Found ${chats.length} subscribed channels');
       return chats.map((c) => TeliChannel.fromRaw(c)).toList();
     }
+    log.w('Unexpected result type: ${result.runtimeType}');
     return [];
   }
 
@@ -156,11 +167,14 @@ class TeliClient {
     int limit = 20,
     int offsetId = 0,
   }) async {
+    log.i('Fetching messages for channel ${channel.id} (limit=$limit, offsetId=$offsetId)');
     final peer = _getPeer(channel);
     final allMessages = <TeliMessage>[];
     int currentOffsetId = offsetId;
+    int page = 0;
 
     while (allMessages.length < limit) {
+      page++;
       final remaining = limit - allMessages.length;
       final pageLimit = remaining < 100 ? remaining : 100;
 
@@ -177,7 +191,10 @@ class TeliClient {
         ),
       );
 
-      if (result is! t.MessagesMessagesBase) break;
+      if (result is! t.MessagesMessagesBase) {
+        log.w('Page $page: unexpected result type ${result.runtimeType}');
+        break;
+      }
 
       final messages = switch (result) {
         t.MessagesMessages m => m.messages,
@@ -187,16 +204,21 @@ class TeliClient {
         _ => <t.MessageBase>[],
       };
 
-      if (messages.isEmpty) break;
+      if (messages.isEmpty) {
+        log.d('Page $page: empty page');
+        break;
+      }
 
       final converted = messages.map((m) => TeliMessage.fromRaw(m)).toList();
       allMessages.addAll(converted);
+      log.d('Page $page: got ${messages.length} messages (${allMessages.length}/$limit)');
 
       if (messages.length < pageLimit) break;
 
       currentOffsetId = converted.last.id;
     }
 
+    log.i('Fetched ${allMessages.length} messages total');
     return allMessages;
   }
 
@@ -217,7 +239,10 @@ class TeliClient {
     required int channelId,
     int? channelAccessHash,
   }) async {
+    log.d('refreshFileReference: messageId=$messageId channelId=$channelId');
+
     if (channelAccessHash != null) {
+      log.d('Using direct channel access hash');
       return getMessageById(
         messageId,
         channelId: channelId,
@@ -230,7 +255,10 @@ class TeliClient {
       t.MessagesGetMessages(id: [t.InputMessageID(id: messageId)]),
     );
 
-    if (result is! t.MessagesMessagesBase) return null;
+    if (result is! t.MessagesMessagesBase) {
+      log.w('refreshFileReference: unexpected result type ${result.runtimeType}');
+      return null;
+    }
 
     // Extract the access hash from the chats list
     int? resolvedAccessHash;
@@ -243,10 +271,14 @@ class TeliClient {
     for (final chat in chats) {
       if (chat is t.Channel && chat.id == channelId) {
         resolvedAccessHash = chat.accessHash;
+        log.d('Resolved channel access hash: $resolvedAccessHash');
         break;
       }
     }
-    if (resolvedAccessHash == null) return null;
+    if (resolvedAccessHash == null) {
+      log.w('refreshFileReference: channel $channelId not found in chats');
+      return null;
+    }
 
     // Extract the message
     final messages = switch (result) {
@@ -256,16 +288,21 @@ class TeliClient {
       t.MessagesMessagesNotModified _ => <t.MessageBase>[],
       _ => <t.MessageBase>[],
     };
-    if (messages.isEmpty) return null;
+    if (messages.isEmpty) {
+      log.w('refreshFileReference: no messages found');
+      return null;
+    }
 
     for (final msg in messages) {
       if (msg is t.Message) {
         final teliMsg = TeliMessage.fromRaw(msg);
         if (teliMsg.documentId != null && teliMsg.fileReference != null) {
+          log.d('Fresh file reference obtained for message $messageId');
           return teliMsg;
         }
       }
     }
+    log.d('refreshFileReference: message $messageId has no media');
     return null;
   }
 
@@ -277,6 +314,7 @@ class TeliClient {
     required int channelId,
     required int accessHash,
   }) async {
+    log.d('getMessageById: messageId=$messageId channelId=$channelId');
     final result = await invoke(
       t.ChannelsGetMessages(
         channel: t.InputChannel(channelId: channelId, accessHash: accessHash),
@@ -284,7 +322,10 @@ class TeliClient {
       ),
     );
 
-    if (result is! t.MessagesMessagesBase) return null;
+    if (result is! t.MessagesMessagesBase) {
+      log.w('getMessageById: unexpected result type ${result.runtimeType}');
+      return null;
+    }
 
     final messages = switch (result) {
       t.MessagesMessages m => m.messages,
@@ -294,13 +335,17 @@ class TeliClient {
       _ => <t.MessageBase>[],
     };
 
-    if (messages.isEmpty) return null;
+    if (messages.isEmpty) {
+      log.w('getMessageById: message $messageId not found');
+      return null;
+    }
 
     for (final msg in messages) {
       if (msg is t.Message) {
         return TeliMessage.fromRaw(msg);
       }
     }
+    log.d('getMessageById: no t.Message found');
     return null;
   }
 
@@ -391,9 +436,11 @@ class TeliClient {
     int limit = 20,
     int offsetId = 0,
   }) async* {
+    log.i('Streaming messages for channel ${channel.id} (limit=$limit, offsetId=$offsetId)');
     final peer = _getPeer(channel);
     int currentOffsetId = offsetId;
     int remaining = limit;
+    int total = 0;
 
     while (remaining > 0) {
       final pageLimit = remaining < 100 ? remaining : 100;
@@ -411,7 +458,10 @@ class TeliClient {
         ),
       );
 
-      if (result is! t.MessagesMessagesBase) break;
+      if (result is! t.MessagesMessagesBase) {
+        log.w('getMessagesStream: unexpected result type ${result.runtimeType}');
+        break;
+      }
 
       final messages = switch (result) {
         t.MessagesMessages m => m.messages,
@@ -425,12 +475,15 @@ class TeliClient {
 
       final batch =
           messages.map((m) => TeliMessage.fromRaw(m)).toList();
+      total += batch.length;
       yield batch;
       remaining -= batch.length;
+      log.d('Streamed batch of ${batch.length} messages ($total/$limit)');
 
       if (messages.length < pageLimit) break;
       currentOffsetId = batch.last.id;
     }
+    log.i('Streamed $total messages total');
   }
 
   Stream<List<TeliMessage>> getMessagesByTimeRange(
@@ -796,6 +849,7 @@ class TeliClient {
   }) async* {
     int? dcId;
     int downloadedBytes = offset;
+    log.d('Download starting offset=$downloadedBytes chunkSize=$chunkSize');
 
     while (true) {
       t.TlObject? result;
@@ -818,10 +872,11 @@ class TeliClient {
       } on Object catch (e) {
         final migrateDc = _parseFileMigrateDc(e.toString());
         if (migrateDc != null && migrateRetryCount < 2) {
+          log.w('FILE_MIGRATE_$migrateDc — connecting to DC $migrateDc');
           await connectToDc(migrateDc);
           dcId = migrateDc;
           migrateRetryCount++;
-          continue; // Retry the chunk on the correct DC
+          continue;
         }
         rethrow;
       }
@@ -830,7 +885,10 @@ class TeliClient {
         yield result.bytes;
         downloadedBytes += result.bytes.length;
         onProgress?.call(downloadedBytes);
-        if (result.bytes.length < chunkSize) break;
+        if (result.bytes.length < chunkSize) {
+          log.d('Download complete: $downloadedBytes bytes');
+          break;
+        }
       } else if (result is t.UploadFileCdnRedirect) {
         throw UnsupportedError('CDN redirect not implemented');
       } else {
@@ -847,10 +905,11 @@ class TeliClient {
   /// - **TimeoutException**: The DC socket is dead/stale (no response within
   ///   30 s) — evict, reconnect, retry.
   Future<t.TlObject?> _invokeOnDc(int dcId, t.TlMethod method) async {
+    log.d('Invoke on DC $dcId: ${method.runtimeType}');
     try {
       return await _invokeOnDcRaw(dcId, method);
     } on TimeoutException {
-      // DC socket is dead/stale — evict and reconnect
+      log.w('DC $dcId timed out — evicting and reconnecting');
       final old = _dcPool.remove(dcId);
       await old?.dispose();
       await credentials.removeDcSession(dcId);
@@ -861,6 +920,7 @@ class TeliClient {
       final errorStr = e.toString();
       if (errorStr.contains('AUTH_KEY_UNREGISTERED') ||
           errorStr.contains('AUTH_KEY_INVALID')) {
+        log.w('DC $dcId auth key expired — evicting and reconnecting');
         final old = _dcPool.remove(dcId);
         await old?.dispose();
         await credentials.removeDcSession(dcId);
@@ -890,6 +950,7 @@ class TeliClient {
       ),
     );
     if (response.error != null) {
+      log.e('DC $dcId invoke error: ${response.error!.errorMessage}');
       throw Exception(response.error!.errorMessage);
     }
     return response.result;
@@ -910,8 +971,10 @@ class TeliClient {
   /// After a successful connection (via either path), the `AuthorizationKey`
   /// is saved via `credentials.saveDcSession` for reuse on next app launch.
   Future<void> connectToDc(int dcId) async {
+    log.i('Connecting to DC $dcId');
     if (_dcPool.containsKey(dcId) && _dcPool[dcId]!.client != null) {
-      return; // Already connected
+      log.d('DC $dcId already connected');
+      return;
     }
 
     final dcHost = _dcOptions[dcId];
@@ -925,16 +988,19 @@ class TeliClient {
       try {
         final restored = await _connectDcWithStoredKey(dcId, dcHost, storedKeyJson);
         _dcPool[dcId] = restored;
-        return; // Restored successfully
+        log.i('DC $dcId restored from stored session');
+        return;
       } catch (e) {
-        // Stored key is expired/invalid — fall through to fresh export+import
+        log.w('Stored session for DC $dcId expired — falling through to fresh export');
         await credentials.removeDcSession(dcId);
       }
     }
 
     // ── Fresh export + import ──
+    log.d('DC $dcId: performing fresh export+import');
     final dcEntry = await _connectDcWithExportImport(dcId, dcHost);
     _dcPool[dcId] = dcEntry;
+    log.i('DC $dcId connected via export+import');
   }
 
   /// Restore a DC client using a previously saved `AuthorizationKey`.
@@ -1060,28 +1126,39 @@ class TeliClient {
 
   /// Get the currently authenticated user.
   Future<TeliUser?> getCurrentUser() async {
+    log.d('Fetching current user');
     final result = await invoke(
       t.UsersGetUsers(id: [const t.InputUserSelf()]),
     );
 
-    if (result is! t.Vector) return null;
+    if (result is! t.Vector) {
+      log.w('getCurrentUser: unexpected result type ${result.runtimeType}');
+      return null;
+    }
     final users = result.items.cast<t.User>();
-    if (users.isEmpty) return null;
-    return TeliUser.fromRaw(users.first);
+    if (users.isEmpty) {
+      log.w('getCurrentUser: empty user list');
+      return null;
+    }
+    final user = TeliUser.fromRaw(users.first);
+    log.i('Current user: ${user.displayName} (ID: ${user.id})');
+    return user;
   }
 
   Future<void> logout() async {
+    log.i('Logging out');
     await invoke(const t.AuthLogOut());
     credentials.sessionData = null;
     await credentials.clearDcSessions();
     await close();
+    log.i('Logged out');
   }
 
   Future<void> close() async {
+    log.d('Closing client');
     await _streamSubscription?.cancel();
     await _teliSocket?.close();
     await _updateController.close();
-    // Close all DC pool connections
     for (final dc in _dcPool.values) {
       await dc.dispose();
     }
@@ -1089,6 +1166,7 @@ class TeliClient {
     _client = null;
     _teliSocket = null;
     _streamSubscription = null;
+    log.d('Client closed');
   }
 }
 
